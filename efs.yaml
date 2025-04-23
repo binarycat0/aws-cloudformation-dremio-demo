@@ -1,0 +1,32 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "EFS file system for Dremio storage"
+
+
+
+Resources:
+  FileSystem:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      Encrypted: true
+      PerformanceMode: generalPurpose
+      ThroughputMode: bursting
+
+  MountTargetA:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref FileSystem
+      SubnetId: !ImportValue DremioStack-SubnetAId
+      SecurityGroups: [!ImportValue DremioStack-SecurityGroupId]
+  
+  MountTargetB:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref FileSystem
+      SubnetId: !ImportValue DremioStack-SubnetBId
+      SecurityGroups: [!ImportValue DremioStack-SecurityGroupId]
+
+Outputs:
+  FileSystemId:
+    Value: !Ref FileSystem
+    Export:
+      Name: "DremioStack-FileSystemId"

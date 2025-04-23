@@ -1,0 +1,153 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "ECS Services for Dremio on EC2"
+
+Parameters:
+  DremioImage:
+    Type: String
+    Default: dremio/dremio-oss:latest
+  ECSClusterName:
+    Type: String
+
+Resources:
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref ECSClusterName
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/dremio
+      RetentionInDays: 7
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets: [!ImportValue DremioStack-SubnetAId, !ImportValue DremioStack-SubnetBId]
+      SecurityGroups: [!ImportValue DremioStack-SecurityGroupId]
+      Scheme: internet-facing
+      Type: application
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: 9047
+      Protocol: HTTP
+      VpcId: !ImportValue DremioStack-VpcId
+      TargetType: instance
+      HealthCheckPath: /
+
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  CoordinatorTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: dremio-coordinator-task
+      Cpu: "2048"
+      Memory: "4096"
+      NetworkMode: bridge
+      ExecutionRoleArn: !ImportValue DremioStack-ExecutionRoleArn
+      ContainerDefinitions:
+        - Name: coordinator
+          Image: !Ref DremioImage
+          PortMappings:
+            - ContainerPort: 9047
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/dremio
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-stream-prefix: coordinator
+          Environment:
+            - Name: DREMIO_ROLE
+              Value: coordinator
+            - Name: DREMIO_RDBMS_HOST
+              Value: !ImportValue DremioStack-RDSEndpoint
+            - Name: DREMIO_RDBMS_PORT
+              Value: "5432"
+          Secrets:
+            - Name: DREMIO_RDBMS_USER
+              ValueFrom: !Sub arn:aws:ssm:us-west-2:${AWS::AccountId}:parameter/dremio/db/user
+            - Name: DREMIO_RDBMS_PASSWORD
+              ValueFrom: !Sub arn:aws:ssm:us-west-2:${AWS::AccountId}:parameter/dremio/db/password
+          MountPoints:
+            - SourceVolume: dremio-data
+              ContainerPath: /opt/dremio/data
+      Volumes:
+        - Name: dremio-data
+          Host:
+            SourcePath: /mnt/efs/dremio-data
+
+  ExecutorTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: dremio-executor-task
+      Cpu: "2048"
+      Memory: "4096"
+      NetworkMode: bridge
+      ExecutionRoleArn: !ImportValue DremioStack-ExecutionRoleArn
+      ContainerDefinitions:
+        - Name: executor
+          Image: !Ref DremioImage
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/dremio
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-stream-prefix: executor
+          Environment:
+            - Name: DREMIO_ROLE
+              Value: coordinator
+            - Name: DREMIO_RDBMS_HOST
+              Value: !ImportValue DremioStack-RDSEndpoint
+            - Name: DREMIO_RDBMS_PORT
+              Value: "5432"
+          Secrets:
+            - Name: DREMIO_RDBMS_USER
+              ValueFrom: !Sub arn:aws:ssm:us-west-2:${AWS::AccountId}:parameter/dremio/db/user
+            - Name: DREMIO_RDBMS_PASSWORD
+              ValueFrom: !Sub arn:aws:ssm:us-west-2:${AWS::AccountId}:parameter/dremio/db/password
+          MountPoints:
+            - SourceVolume: dremio-data
+              ContainerPath: /opt/dremio/data
+      Volumes:
+        - Name: dremio-data
+          Host:
+            SourcePath: /mnt/efs/dremio-data
+
+  CoordinatorService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - Listener
+      - TargetGroup
+      - LoadBalancer
+    Properties:
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref CoordinatorTask
+      DesiredCount: 1
+      LaunchType: EC2
+      LoadBalancers:
+        - ContainerName: coordinator
+          ContainerPort: 9047
+          TargetGroupArn: !Ref TargetGroup
+
+  ExecutorService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref ExecutorTask
+      DesiredCount: 1
+      LaunchType: EC2
+
+Outputs:
+  DremioUI:
+    Description: "Access Dremio Web UI"
+    Value: !Sub "http://${LoadBalancer.DNSName}"

@@ -1,0 +1,52 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "IAM Role for ECS Tasks with S3 access"
+
+Resources:
+  ECSInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: DremioECSInstanceExecutionRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Path: "/"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+        - arn:aws:iam::aws:policy/AmazonElasticFileSystemClientReadWriteAccess
+        - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+      Policies:
+        - PolicyName: DremioSSMAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                Resource:
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/dremio/db/*
+        - PolicyName: S3AccessSurftempSST
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ["s3:ListBucket"]
+                Resource: "arn:aws:s3:::surftemp-sst"
+              - Effect: Allow
+                Action: ["s3:GetObject"]
+                Resource: "arn:aws:s3:::surftemp-sst/*"
+
+Outputs:
+  ExecutionRoleArn:
+    Value: !GetAtt ECSInstanceRole.Arn
+    Export:
+      Name: "DremioStack-ExecutionRoleArn"
+  ExecutionRoleName:
+    Value: !Ref ECSInstanceRole
+    Export:
+      Name: "DremioStack-ExecutionRoleName"

@@ -1,0 +1,31 @@
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Minimal RDS PostgreSQL with multi-AZ subnet group"
+
+Resources:
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group across 2 AZs
+      SubnetIds:
+        - !ImportValue DremioStack-SubnetAId
+        - !ImportValue DremioStack-SubnetBId
+
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      Engine: postgres
+      DBInstanceClass: db.t4g.micro
+      AllocatedStorage: 20
+      DBName: dremiodb
+      MasterUsername: !Sub "{{resolve:ssm:/dremio/db/user}}"
+      MasterUserPassword: !Sub "{{resolve:ssm-secure:/dremio/db/password}}"
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups: [!ImportValue DremioStack-SecurityGroupId]
+      PubliclyAccessible: true
+
+Outputs:
+  RDSEndpoint:
+    Value: !GetAtt RDSInstance.Endpoint.Address
+    Export:
+      Name: "DremioStack-RDSEndpoint"

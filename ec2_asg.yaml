@@ -1,0 +1,68 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "EC2 Auto Scaling Group for ECS with EFS mount"
+
+Parameters:
+  ECSClusterName:
+    Type: String
+
+Resources:
+  ECSInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !ImportValue DremioStack-ExecutionRoleName
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        InstanceType: t3.medium
+        IamInstanceProfile:
+          Arn: !GetAtt ECSInstanceProfile.Arn
+        ImageId: !Sub "{{resolve:ssm:/aws/service/ecs/optimized-ami/amazon-linux-2/recommended/image_id}}"
+        SecurityGroupIds:
+          - !ImportValue DremioStack-SecurityGroupId
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            echo ECS_CLUSTER=${ECSClusterName} >> /etc/ecs/ecs.config
+            yum install -y amazon-efs-utils
+            mkdir -p /mnt/efs/dremio-data
+            cat <<EOF > /etc/systemd/system/mnt-efs-dremio-data.mount
+            [Unit]
+            Description=Mount EFS to /mnt/efs/dremio-data
+            After=network.target
+
+            [Mount]
+            What=${!ImportValue DremioStack-FileSystemId}:/ 
+            Where=/mnt/efs/dremio-data
+            Type=efs
+            Options=_netdev
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+
+            systemctl daemon-reexec
+            systemctl enable mnt-efs-dremio-data.mount
+            systemctl start mnt-efs-dremio-data.mount
+
+            systemctl restart ecs
+
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !ImportValue DremioStack-SubnetAId
+        - !ImportValue DremioStack-SubnetBId
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      MinSize: "1"
+      MaxSize: "2"
+      DesiredCapacity: "1"
+      Tags:
+        - Key: Name
+          Value: dremio-ecs-instance
+          PropagateAtLaunch: true
